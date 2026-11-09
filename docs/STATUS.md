@@ -147,4 +147,12 @@ Linux** (Intel Iris Xe, Mesa ANV). Metal não foi tocado nem testado.
   do workflow. Passos para o usuário em `docs/linux.md` ("Steam Deck"). **O usuário deve testar no Deck**: setup no
   Desktop Mode (tempo do build do código do jogo), tela cheia no Game Mode, controles (View+Menu abre o menu), fps
   (RADV nunca rodou o jogo), log `~/.local/share/eowrecomp/eowrecomp.log`.
+- **Primeira execução no Steam Deck** (2026-11-09, LCD, SteamOS, RADV VANGOGH, Game Mode): o AppImage do workflow
+  instala, o setup gera e compila o código do jogo no próprio Deck (antes falhava: `modules.h` faltava em
+  `gamelib-src/`), o jogo entra na abertura. Log do usuário: swapchain 1280x720 (Gamescope WSI), `[post] 1920x1080
+  smaa -> 1280x720`; 15-25 fps enquanto pipelines compilam, depois **26-30 fps** estáveis (`[pace]`: modo 30 fps do
+  próprio jogo). `wait` na GPU ~3 ms a cada 2 s: **limitado pela CPU**, não pela GPU (baixar a resolução quase não
+  deve ajudar). Ainda pulados: `compute program` ~370 dispatches/2 s (o SUST `eb20…`, problema aberto 3). O SDL
+  reporta o controle como "Google Stadia Controller" (prompts podem sair errados). Próximo: perfil de CPU no Deck
+  (`FNPROF=1`), swapchain 1280x800 sob Gamescope.
 - Widescreen, ícones de botão, menu sem abas específicas do EoW: M7.
