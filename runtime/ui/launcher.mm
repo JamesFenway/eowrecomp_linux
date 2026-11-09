@@ -230,7 +230,8 @@ static void set_failure(int k) {
         "Make sure there's about 12 GB free and try again.",
         "EoWRecomp needs version 1.0.0 of the game, without updates.",
         "Some files are missing. Choose the folder again; if it happens again, copy your extracted game files again.",
-        "Make sure there's about 2 GB free and try again. If it keeps happening, report it on GitHub."};
+        // (the build checks no disk space: its own reason, from runtime/gamebuild.c, goes first - see build_game_code)
+        "The details are in eowrecomp.log in the data folder. If it keeps happening, report it on GitHub with that log."};
     if (k >= 1 && k <= 6) set_job(head[k], true, hint[k]);
 }
 
@@ -334,6 +335,15 @@ static bool build_game_code(void) {
     if (!ok) {
         fprintf(stderr, "[launcher] game code: %s\n", why);
         set_failure(FAIL_BUILD);
+        // the reason itself ("the game code didn't compile", ...) on the screen: the old fixed "2 GB free" hint sent a
+        // player with 50 GB free looking for disk space
+        if (why[0]) {
+            std::string h = why;
+            h[0] = (char)toupper((unsigned char)h[0]);
+            pthread_mutex_lock(&g_lock);
+            g_job_hint = h + ". " + g_job_hint;
+            pthread_mutex_unlock(&g_lock);
+        }
     }
     return ok;
 }
