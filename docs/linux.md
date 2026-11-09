@@ -35,13 +35,33 @@ GPU (Mesa RADV), so it takes the x86-64 AppImage as it is; what is new there is 
 only run on Intel (ANV). The renderer already uses D32S8 depth on AMD (no D24S8 attachments there,
 `runtime/nvn/vulkan/textures.c`) and decodes ASTC textures on the CPU (`runtime/nvn/astc.c`).
 
-1. In desktop mode, put the AppImage somewhere in your home folder (for example `~/Applications`) and run it once
-   from the file manager or Konsole: set the game up from your own files on the start screen (building the game code
-   takes a while on the Deck).
-2. Steam -> Games -> Add a Non-Steam Game -> the AppImage. Game Mode runs it under Gamescope, fullscreen.
-3. With Steam Input on (the default) the Deck's controls are an Xbox controller to the game.
+Getting the AppImage: no Linux release is published yet. The GitHub Actions workflow `Linux AppImage`
+(`.github/workflows/linux-appimage.yml`) builds it on every push to `main` / `linux-appimage` (or by hand: Actions ->
+Linux AppImage -> Run workflow); download the `EoWRecomp-linux-x86_64-AppImage` artifact from the run's page and
+unzip it. Or `make appimage` on any x86-64 Linux PC with podman.
 
-The Deck's screen is 1280x800 (16:10): the default aspect ratio (unlocked) uses all of it.
+1. **Desktop Mode** (Steam button -> Power -> Switch to Desktop). Put the AppImage and, in a folder of their own,
+   your `.nsp` / `.xci` and `prod.keys` somewhere in your home folder (for example `~/Applications/EoWRecomp/` and
+   `~/Games/EoW/`; an SD card works for the game package too). In Dolphin: right-click the AppImage -> Properties ->
+   Permissions -> "Is executable" (or `chmod +x` in Konsole).
+2. Run it once from Desktop Mode (double-click). On the start screen, choose the game files folder: the setup writes
+   only the game's code (~40 MB) to `~/.local/share/eowrecomp` and builds it with the bundled compiler - on the Deck
+   that takes a long time (tens of minutes, all 8 threads busy; keep it plugged in). The 7.5 GB of game data is read
+   from your package in place, so leave the package where it is. In Desktop Mode the Deck's controls act as mouse and
+   keyboard unless the app runs from Steam: use the touchscreen or the trackpads for this step.
+3. Add it to Steam: in Desktop Mode, Steam -> Games -> "Add a Non-Steam Game to My Library" -> Browse -> the
+   AppImage (set the file type filter to "All files"). No launch options are needed, and no Proton: it is a native
+   Linux app (leave Properties -> Compatibility off).
+4. Back in **Game Mode**, start it from the library (Non-Steam). It runs under Gamescope and is always fullscreen
+   there (`settings_gamescope()`, `runtime/settings.c`), whatever the Fullscreen setting says for the desktop.
+5. Controls: with Steam Input on (the default) the Deck is an Xbox controller to the game. The buttons are by
+   position, like on a Switch: the right face button (Deck's B) is the Switch's A, the bottom one (Deck's A) is B.
+   Our menu (settings, controls): View + Menu together (the Steam button is Steam's own).
+
+The screen is 1280x800 (16:10). The game draws 16:9 for now (no widescreen patches for Echoes of Wisdom yet,
+`runtime/hle/widescreen.c`), so there are thin bars above and below. The log is
+`~/.local/share/eowrecomp/eowrecomp.log`; Gamescope's own performance overlay (the `...` button -> Performance)
+shows the frame rate.
 
 ## Building from source
 Ubuntu / Debian packages (other distributions: the same libraries under their names; SDL3 3.2 or newer):

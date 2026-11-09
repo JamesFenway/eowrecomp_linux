@@ -139,4 +139,12 @@ Linux** (Intel Iris Xe, Mesa ANV). Metal não foi tocado nem testado.
   ligados no Makefile, o helper do gerador (`make gen-helper`) no lugar do helper de randomizer do LAS, o smoketest
   refeito para o EoW (setup, tela inicial, abertura + primeira cena, fps). **Ainda não rodados**: falta um build do
   AppImage (podman) e um smoketest com os arquivos do jogo; Steam Deck (RADV) nunca testado.
+- **Steam Deck** (2026-11-09, branch `linux-appimage`): workflow `.github/workflows/linux-appimage.yml` (Actions)
+  gera o AppImage x86-64 como artefato; sob Gamescope (Game Mode) a janela é sempre tela cheia
+  (`settings_gamescope()`: `GAMESCOPE_WAYLAND_DISPLAY` / `XDG_CURRENT_DESKTOP=gamescope`; sem isso o Gamescope
+  mostrava a janela de 1280x720 encaixotada). Lógica testada só com variáveis de ambiente falsas; o AppImage não pôde
+  ser montado na sessão (rede do sandbox bloqueia ziglang.org, ffmpeg.org, apt.llvm.org, Launchpad): ver o resultado
+  do workflow. Passos para o usuário em `docs/linux.md` ("Steam Deck"). **O usuário deve testar no Deck**: setup no
+  Desktop Mode (tempo do build do código do jogo), tela cheia no Game Mode, controles (View+Menu abre o menu), fps
+  (RADV nunca rodou o jogo), log `~/.local/share/eowrecomp/eowrecomp.log`.
 - Widescreen, ícones de botão, menu sem abas específicas do EoW: M7.
