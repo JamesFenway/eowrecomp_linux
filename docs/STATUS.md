@@ -135,5 +135,8 @@ Linux** (Intel Iris Xe, Mesa ANV). Metal não foi tocado nem testado.
    (código do jogo: ~1 h na primeira vez; depois só o que muda).
 
 ### Pendências conhecidas
-- `docs/linux.md` / `docs/BUILD-windows.md` ainda são do LAS.
+- `docs/BUILD-windows.md` ainda é do LAS. `docs/linux.md` revisado (2026-11-09): `make appimage` / `make smoketest`
+  ligados no Makefile, o helper do gerador (`make gen-helper`) no lugar do helper de randomizer do LAS, o smoketest
+  refeito para o EoW (setup, tela inicial, abertura + primeira cena, fps). **Ainda não rodados**: falta um build do
+  AppImage (podman) e um smoketest com os arquivos do jogo; Steam Deck (RADV) nunca testado.
 - Widescreen, ícones de botão, menu sem abas específicas do EoW: M7.
