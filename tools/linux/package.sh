@@ -45,8 +45,18 @@ cp README.md LICENSE "$APPDIR/usr/bin/"  # (licenses and source links of the bun
 [ -x "$L/helper/eowgen/eowgen" ] || { echo "no game code generator helper in $L/helper (tools/linux/appimage.sh builds it)"; exit 1; }
 cp -R "$L/helper/eowgen" build/zig "$APPDIR/usr/bin/"
 mkdir "$APPDIR/usr/bin/gamelib-src"
-cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gamelib_entry.c runtime/hle/hle_symbols.txt \
-   "$APPDIR/usr/bin/gamelib-src/"
+cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h runtime/modules.h tools/gamelib_entry.c \
+   runtime/hle/hle_symbols.txt "$APPDIR/usr/bin/gamelib-src/"
+# The start screen's first compile, as runtime/gamebuild.c runs it: the shipped zig on the shipped headers. Without
+# modules.h (gamelib.h includes it) every player's setup failed in its first second ("1 error generated", Steam Deck
+# log 2026-11-09). Only for this machine's arch: a cross build's zig doesn't run here.
+if [ "$ARCH" = "$(uname -m)" ]; then
+    CPU=; [ "$ARCH" = x86_64 ] && CPU=-mcpu=x86_64_v3
+    "$APPDIR/usr/bin/zig/zig" cc -O1 -fno-strict-aliasing -fvisibility=hidden $CPU -fPIC \
+        -I"$APPDIR/usr/bin/gamelib-src" -DGAMELIB_ID='"check"' -c "$APPDIR/usr/bin/gamelib-src/gamelib_entry.c" \
+        -o "$L/gamelib_entry_check.o" || { echo "package: gamelib_entry.c doesn't compile from gamelib-src/"; exit 1; }
+    rm -f "$L/gamelib_entry_check.o"
+fi
 cp tools/linux/AppRun "$APPDIR/" && chmod +x "$APPDIR/AppRun"
 cp tools/linux/eowrecomp.desktop "$APPDIR/"
 cp docs/icon/icon_1024.png "$APPDIR/eowrecomp.png" && ln -sf eowrecomp.png "$APPDIR/.DirIcon"
