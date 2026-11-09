@@ -71,10 +71,23 @@ const char *settings_language_name(void) {
     return "English";
 }
 
+bool settings_gamescope(void) {
+#if defined(__linux__) && !defined(__ANDROID__)
+    // gamescope sets GAMESCOPE_WAYLAND_DISPLAY for what it runs; Steam's Game Mode session names it as the desktop
+    const char *d = getenv("XDG_CURRENT_DESKTOP"), *g = getenv("GAMESCOPE_WAYLAND_DISPLAY");
+    return (g && *g) || (d && !strcmp(d, "gamescope"));
+#else
+    return false;
+#endif
+}
+
+bool settings_fullscreen(void) { return g_settings.fullscreen || settings_gamescope(); }
+
 void settings_load(void) {
     static bool loaded;
     if (loaded) return;
     loaded = true;
+    if (settings_gamescope()) LOG("[settings] Gamescope: the window is fullscreen\n");
     FILE *f = fopen(SETTINGS_FILE, "r");
     if (!f) return;
     char line[256];
