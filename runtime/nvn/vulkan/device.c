@@ -288,8 +288,22 @@ static VkPresentModeKHR present_mode(void) {
     VkPresentModeKHR m[16];
     if (n > 16) n = 16;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, m);
-    for (uint32_t i = 0; i < n; i++) if (m[i] == want) return want;
-    return VK_PRESENT_MODE_FIFO_KHR;
+    bool has[8] = {false};
+    for (uint32_t i = 0; i < n; i++) if (m[i] < 8) has[m[i]] = true;
+    static const char *const name[4] = {"immediate", "mailbox", "fifo", "fifo relaxed"};
+    VkPresentModeKHR got = has[want] ? want : VK_PRESENT_MODE_FIFO_KHR;
+    // Gamescope (Steam Deck's Game Mode) offers no mailbox: FIFO there blocked the presenting thread ~18 ms a frame
+    // in the submit that waits for the window image (EOWRECOMP_VK_PROF "submit" 1.4-1.7 s of every 2 s at 38-46 fps,
+    // GPU under half busy). Immediate is the next mode that never waits for the display; Gamescope still composites
+    // it, so it doesn't tear unless the player allows tearing in Steam's performance settings.
+    if (!e && !has[want] && has[VK_PRESENT_MODE_IMMEDIATE_KHR] && settings_gamescope()) got = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    static VkPresentModeKHR logged = (VkPresentModeKHR)-1;
+    if (got != logged) {
+        logged = got;
+        LOG("[vk] present mode %s (asked %s; offered:%s%s%s%s)\n", name[got & 3], name[want & 3], has[0] ? " immediate" : "",
+            has[1] ? " mailbox" : "", has[2] ? " fifo" : "", has[3] ? " fifo-relaxed" : "");
+    }
+    return got;
 }
 
 static void create_swapchain(void) {
