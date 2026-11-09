@@ -239,19 +239,22 @@ $(B)/rt/platform/windows_rc.o: runtime/platform/windows.rc docs/icon/icon.ico
 	@mkdir -p $(dir $@)
 	$(WINDRES) -I docs/icon -O coff $< -o $@
 
-# The game code generator as a standalone helper (PyInstaller, tools/eowgen.spec): build/helper/eowgen/, for the start
-# screen's setup on the player's machine (runtime/gamebuild.c). GEN_VENV: its venv (make app: one on build/deps'
-# Python, which runs on older macOS than Homebrew's).
+# The game code generator as a standalone helper (PyInstaller, tools/eowgen.spec): $(GEN_HELPER_DIR)/eowgen/, for the
+# start screen's setup on the player's machine (runtime/gamebuild.c). GEN_VENV: its venv (make app: one on build/deps'
+# Python, which runs on older macOS than Homebrew's). GEN_HELPER_DIR / GEN_HELPER_WORK: where it goes and PyInstaller's
+# scratch folder (the Linux AppImages freeze one per arch, tools/linux/appimage.sh).
 GEN_PY  ?= $(if $(filter windows,$(PLATFORM)),py -3.12,python3)
 GEN_VENV ?= build/gen-venv
 GEN_VPY := $(if $(filter windows,$(PLATFORM)),$(GEN_VENV)/Scripts/python.exe,$(GEN_VENV)/bin/python)
+GEN_HELPER_DIR ?= build/helper
+GEN_HELPER_WORK ?= build/pyinstaller
 
 gen-helper: $(GEN_VENV)/.ok
 	$(if $(filter windows,$(PLATFORM)),USERPROFILE="$$(cygpath -w ~ 2>/dev/null || echo $$HOME)") \
-	$(GEN_VPY) -m PyInstaller --noconfirm --clean --log-level WARN --distpath build/helper --workpath build/pyinstaller \
+	$(GEN_VPY) -m PyInstaller --noconfirm --clean --log-level WARN --distpath $(GEN_HELPER_DIR) --workpath $(GEN_HELPER_WORK) \
 	    tools/eowgen.spec
-	$(if $(filter windows,$(PLATFORM)),$(GEN_VPY) tools/pe_no_cfg.py build/helper/eowgen/eowgen.exe)
-	@du -sh build/helper/eowgen
+	$(if $(filter windows,$(PLATFORM)),$(GEN_VPY) tools/pe_no_cfg.py $(GEN_HELPER_DIR)/eowgen/eowgen.exe)
+	@du -sh $(GEN_HELPER_DIR)/eowgen
 
 $(GEN_VENV)/.ok:
 	$(GEN_PY) -m venv $(GEN_VENV)
@@ -268,7 +271,20 @@ app:
 	[ -x build/zig/zig ] || tools/fetch_zig.sh
 	MACOS_MIN=$(APP_MIN) tools/bundle_macos.sh build/rel/eowrecomp
 
-.PHONY: all gen gen-helper gen-objs runtime-objs app
+# make appimage (Linux): build/dist/EoWRecomp-<version>-linux-<ARCH>.AppImage, built in Ubuntu 22.04 containers (podman,
+# tools/linux/appimage.sh) so it runs on glibc 2.35+ distributions, SteamOS included. ARCH=aarch64 cross-compiles it;
+# make appimages builds both. No game code or files inside: the start screen builds the game code from the player's own
+# files. make smoketest: the release check of the x86-64 AppImage on this machine (tools/linux/smoketest.sh, needs
+# this checkout's extracted/). See docs/linux.md.
+appimage:
+	tools/linux/appimage.sh $(or $(ARCH),$(shell uname -m))
+appimages:
+	tools/linux/appimage.sh x86_64
+	tools/linux/appimage.sh aarch64
+smoketest:
+	tools/linux/smoketest.sh
+
+.PHONY: all gen gen-helper gen-objs runtime-objs app appimage appimages smoketest
 
 build/test_shaders: tools/test_shaders.m runtime/nvn/maxwell/translate.c runtime/nvn/maxwell/shader.h
 	clang -O1 -fobjc-arc -framework Metal -framework Foundation -o $@ tools/test_shaders.m runtime/nvn/maxwell/translate.c
