@@ -443,6 +443,8 @@ static Frame cur_frame;
 
 // Acquire the next window image and begin rendering into it (cleared to `clear`). Returns false when there is
 // nothing to draw into (minimised window).
+extern __thread uint64_t g_blocked_ns;  // kernel.c: this thread's idle time (waits, sleeps), for frame pacing
+
 bool vk_frame_begin(const float clear[4]) {
     cur_frame.ok = false;
     int w, h;
@@ -459,7 +461,9 @@ bool vk_frame_begin(const float clear[4]) {
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
     vk_wait_seq(slot_seq[slot]);
+    uint64_t t_acq = plat_now_ns();
     VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
+    g_blocked_ns += plat_now_ns() - t_acq;  // (waiting for the display: see vk_frame_end)
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         recreate_swapchain();
         r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
@@ -531,10 +535,17 @@ void vk_frame_end(const char *shot_path) {
     uint32_t img = cur_frame.image;
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
     uint64_t seq = vk_pending_seq();
+    // Waiting for the display is idle time, not frame work (frame pacing, exec.c vk_pace_frame: busy = period minus
+    // the presenting thread's blocked time). Under Gamescope (Steam Deck, RADV) that wait happens right here: the
+    // submit that waits on the acquired image blocks until Gamescope hands the image back (~13 ms a submit, 1.5-1.8 s
+    // of every 2 s in EOWRECOMP_VK_PROF's "submit"), so even the title screen's 64 draws counted as 30 ms frames and
+    // the game was held in its 30 fps mode. The GPU's own work still reaches the game through its counters.
+    uint64_t t_pres = plat_now_ns();
     vk_submit_extra(cur_frame.acquired, done_sem[img], VK_NULL_HANDLE);
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
+    g_blocked_ns += plat_now_ns() - t_pres;
     if (r == VK_ERROR_SURFACE_LOST_KHR) atomic_store(&g_surface_stale, true);
     // (a swapchain the system turns, IDENTITY on a rotated display, is "suboptimal" at every present: that's this,
     // not a new size - recreating it each frame would cost the frame)
