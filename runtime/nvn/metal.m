@@ -601,6 +601,7 @@ static NvnTexture *g_last_presented;
 // Every game texture goes (the NvnTexture structs themselves are leaked: guest memory pointed at them), the
 // renderer drops what is keyed by guest addresses / objects, and the heap wrapper is let go: guest memory is
 // about to be replaced (backend_guest_memory_reset wraps the new pages).
+void backend_guest_heap(uint64_t size) { (void)size; }  // (Vulkan: exec.c vk_guest_heap)
 void backend_reset(void) {
     if (!queue) return;  // the game never initialised NVN
     extern void renderer_reset(void);

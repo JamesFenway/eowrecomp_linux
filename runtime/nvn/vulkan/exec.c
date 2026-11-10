@@ -1921,7 +1921,113 @@ static VkBuffer gmem_buf;
 static VkDeviceMemory gmem_mem;
 static uint64_t gmem_size;
 
+// The other way round where the driver can (VK_EXT_map_memory_placed; RADV by default): the heap is GPU memory from the
+// start, mapped at HEAP_BASE when the game sets its heap size (kernel.c SetHeapSize -> vk_guest_heap), and the buffer
+// above is simply bound to it. With the 3220 MB heap imported, each vkQueueSubmit2 took ~17-23 ms on a Steam Deck
+// (RADV; EOWRECOMP_VK_PROF "submit" 1.8 s of every 2 s from the import's log line on, 0.1 ms a submit before it, in
+// four runs; two submissions a frame: 25-30 fps with the GPU and the CPU mostly idle). The likely cause: the kernel's
+// amdgpu driver checks every page of a host-pointer (userptr) buffer again at each submission that lists it - ~820k
+// pages here. Ordinary GPU memory has no such check.
+// EOWRECOMP_VK_HEAP_PLACED=0 / 1: never / wherever the extension is.
+static VkDeviceMemory heap_mem;
+static uint64_t heap_placed;  // bytes of GPU memory mapped at HEAP_BASE
+
+void vk_guest_heap(uint64_t size) {
+#ifdef VK_EXT_map_memory_placed
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("EOWRECOMP_VK_HEAP_PLACED");
+        on = g_vk.map_placed && (e ? atoi(e) != 0 : g_vk.radv);
+        if (g_vk.radv && !on)
+            LOG("[vk] RADV with the guest heap as a host-pointer import: slow submissions (no VK_EXT_map_memory_placed%s)\n",
+                e ? ", or EOWRECOMP_VK_HEAP_PLACED=0" : "");
+    }
+    if (!on || !size) return;
+    if (heap_placed) {  // (set once by the SDK's start-up; a later, larger size keeps what is placed)
+        if (size > heap_placed)
+            LOG("[vk] guest heap grown to %llu MB: only the first %llu MB are GPU memory\n", (unsigned long long)(size >> 20),
+                (unsigned long long)(heap_placed >> 20));
+        return;
+    }
+    PFN_vkMapMemory2KHR map2 = (PFN_vkMapMemory2KHR)vkGetDeviceProcAddr(g_vk.dev, "vkMapMemory2KHR");
+    if (!map2) { LOG("[vk] guest heap not placed: no vkMapMemory2KHR\n"); on = 0; return; }
+    // CPU-cached memory (the game reads its heap all the time: write-combined memory would crawl), in system RAM
+    // where there is a choice
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
+    const VkMemoryPropertyFlags need = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
+                                       VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    int type = -1;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        VkMemoryPropertyFlags fl = mp.memoryTypes[i].propertyFlags;
+        if ((fl & need) != need || mp.memoryHeaps[mp.memoryTypes[i].heapIndex].size < size) continue;
+        if (type < 0 || ((mp.memoryTypes[type].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) &&
+                         !(fl & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)))
+            type = (int)i;
+    }
+    if (type < 0) { LOG("[vk] guest heap not placed: no host-cached memory type for %llu MB\n", (unsigned long long)(size >> 20)); on = 0; return; }
+    uint64_t t0 = plat_now_ns();
+    size = (size + 0xFFFF) & ~0xFFFFull;  // (a whole-memory placed map: a multiple of minPlacedMemoryMapAlignment, the page size)
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = size, .memoryTypeIndex = (uint32_t)type};
+    VkDeviceMemory mem;
+    VkResult r = vkAllocateMemory(g_vk.dev, &ai, NULL, &mem);
+    if (r != VK_SUCCESS) { LOG("[vk] guest heap not placed: allocating %llu MB failed (%d)\n", (unsigned long long)(size >> 20), r); on = 0; return; }
+    // (the mapping replaces the untouched anonymous pages reserved there: the game has not used its heap yet)
+    VkMemoryMapPlacedInfoEXT pl = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_PLACED_INFO_EXT, .pPlacedAddress = (void *)(uintptr_t)HEAP_BASE};
+    VkMemoryMapInfoKHR mi = {.sType = VK_STRUCTURE_TYPE_MEMORY_MAP_INFO_KHR, .pNext = &pl, .flags = VK_MEMORY_MAP_PLACED_BIT_EXT,
+                             .memory = mem, .offset = 0, .size = VK_WHOLE_SIZE};
+    void *at = NULL;
+    r = map2(g_vk.dev, &mi, &at);
+    if (r != VK_SUCCESS || at != (void *)(uintptr_t)HEAP_BASE) {
+        LOG("[vk] guest heap not placed: mapping at %llx failed (%d, %p)\n", (unsigned long long)HEAP_BASE, r, at);
+        // (a failed placed map leaves the address range as it was; one that landed elsewhere is just unmapped)
+        if (r == VK_SUCCESS) vkUnmapMemory(g_vk.dev, mem);
+        vkFreeMemory(g_vk.dev, mem, NULL);
+        on = 0;
+        return;
+    }
+    LOG("[vk] guest heap: %llu MB of GPU memory (type %d) mapped at %llx\n", (unsigned long long)(size >> 20), type,
+        (unsigned long long)HEAP_BASE);
+    fflush(stderr);  // (should the kernel refuse the pages, the fault is right below)
+    memset(at, 0, size);  // a fresh heap reads zero (and every page is there before the game runs)
+    heap_mem = mem;
+    heap_placed = size;
+    LOG("[vk] guest heap ready in %.0f ms\n", (plat_now_ns() - t0) / 1e6);
+#else
+    (void)size;
+#endif
+}
+
+// Reboot: the mapping goes (the address range stays reserved where the driver can: main.c maps fresh pages over the
+// whole guest window next).
+static void heap_unplace(void) {
+#ifdef VK_EXT_map_memory_placed
+    if (!heap_mem) return;
+    PFN_vkUnmapMemory2KHR unmap2 = (PFN_vkUnmapMemory2KHR)vkGetDeviceProcAddr(g_vk.dev, "vkUnmapMemory2KHR");
+    VkMemoryUnmapInfoKHR ui = {.sType = VK_STRUCTURE_TYPE_MEMORY_UNMAP_INFO_KHR, .memory = heap_mem,
+                               .flags = g_vk.unmap_reserve ? VK_MEMORY_UNMAP_RESERVE_BIT_EXT : 0};
+    if (!unmap2 || unmap2(g_vk.dev, &ui) != VK_SUCCESS) vkUnmapMemory(g_vk.dev, heap_mem);
+    vkFreeMemory(g_vk.dev, heap_mem, NULL);
+    heap_mem = VK_NULL_HANDLE;
+    heap_placed = 0;
+#endif
+}
+
 static bool gmem_import(uint64_t size) {
+    if (heap_placed) {  // the heap is GPU memory already: a buffer over it
+        if (gmem_buf) return true;
+        VkBufferCreateInfo pbi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = heap_placed,
+                                  .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                           VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT};
+        VkBuffer pb;
+        if (vkCreateBuffer(g_vk.dev, &pbi, NULL, &pb) != VK_SUCCESS) return false;
+        if (vkBindBufferMemory(g_vk.dev, pb, heap_mem, 0) != VK_SUCCESS) { vkDestroyBuffer(g_vk.dev, pb, NULL); return false; }
+        gmem_buf = pb;
+        gmem_mem = VK_NULL_HANDLE;
+        gmem_size = heap_placed;
+        LOG("[vk] guest heap bound for shader global memory: %llu MB (GPU memory mapped in place)\n", (unsigned long long)(heap_placed >> 20));
+        return true;
+    }
     PFN_vkGetMemoryHostPointerPropertiesEXT props =
         (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryHostPointerPropertiesEXT");
     VkMemoryHostPointerPropertiesEXT mp = {.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
@@ -1959,7 +2065,7 @@ static uint64_t gmem_tried;  // heap size the import was last attempted for (gme
 
 static VkDescriptorBufferInfo gmem_info(void) {
     static int off = -1;
-    if (off < 0) off = getenv("EOWRECOMP_VK_NO_GMEM") != NULL || !g_vk.host_import;
+    if (off < 0) off = getenv("EOWRECOMP_VK_NO_GMEM") != NULL || (!g_vk.host_import && !heap_placed);
     uint64_t want = (kernel_heap_size() + 0xFFFF) & ~0xFFFFull;
     if (want > HEAP_MAX) want = HEAP_MAX;
     if (!off && want > gmem_size && !gmem_import(want)) {
@@ -2306,6 +2412,7 @@ void vk_exec_reset(void) {
         gmem_buf = VK_NULL_HANDLE;
         gmem_mem = VK_NULL_HANDLE;
     }
+    heap_unplace();
     gmem_size = gmem_tried = 0;
     for (int i = 0; i < VC_TAB; i++)  // (the vertex cache: copies of the old pages)
         if (vc_tab[i].buf) vmaDestroyBuffer(g_vk.vma, vc_tab[i].buf, vc_tab[i].mem);
