@@ -164,4 +164,9 @@ Linux** (Intel Iris Xe, Mesa ANV). Metal não foi tocado nem testado.
   apresentação passa quase todo o tempo esperando o Gamescope devolver a imagem. Próximo: confirmar as configurações
   de desempenho do Deck (limite de fps, taxa de atualização, resolução do jogo) e tirar a espera do present da thread
   que roda o jogo.
+  Medido depois (`EOWRECOMP_LOG_PACE=1`, Deck OLED, 2026-11-10): no modo 30 cada quadro tem período 33.8 ms, 16.4 ms
+  bloqueado (a espera pelo próximo vsync: normal) e **17.3 ms de trabalho** na thread do jogo — a GPU faz ~5 ms por
+  quadro e a tradução de comandos ~1.5 ms. Então o limite é a CPU no código do próprio jogo, não o Gamescope. E o
+  modo 30 não volta sozinho: a volta pede média abaixo de 13 ms. Teste em andamento: código do jogo com `-O2`
+  (`GAMEOPT`, input `game_opt` do workflow; artefato `...-game-O2`) contra o `-O1` de sempre.
 - Widescreen, ícones de botão, menu sem abas específicas do EoW: M7.
