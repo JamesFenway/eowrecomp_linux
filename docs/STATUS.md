@@ -155,4 +155,13 @@ Linux** (Intel Iris Xe, Mesa ANV). Metal não foi tocado nem testado.
   deve ajudar). Ainda pulados: `compute program` ~370 dispatches/2 s (o SUST `eb20…`, problema aberto 3). O SDL
   reporta o controle como "Google Stadia Controller" (prompts podem sair errados). Próximo: perfil de CPU no Deck
   (`FNPROF=1`), swapchain 1280x800 sob Gamescope.
+- **Ritmo de quadros no Deck** (2026-11-09/10): o tempo bloqueado no acquire / submit do present conta como ocioso
+  (`g_blocked_ns`); antes o Gamescope prendia o jogo no modo 30 fps até na tela inicial. Resultado no Deck: 37-48 fps,
+  de volta ao modo 60. O commit seguinte trocava para `immediate` supondo que o Gamescope não oferecia mailbox:
+  **errado** — o log mostra `present mode mailbox (offered: mailbox fifo)`, então foi revertido (fica só a linha do
+  log). Na execução seguinte (swapchain 1280x800, ciclo de 11.11 ms e depois 16.67 ms: configuração do Deck mudou) o
+  jogo ficou em ~25 fps no modo 30: GPU ~180 ms e `cpu exec` ~40 ms a cada 2 s, mas `submit` ~1850 ms — a thread de
+  apresentação passa quase todo o tempo esperando o Gamescope devolver a imagem. Próximo: confirmar as configurações
+  de desempenho do Deck (limite de fps, taxa de atualização, resolução do jogo) e tirar a espera do present da thread
+  que roda o jogo.
 - Widescreen, ícones de botão, menu sem abas específicas do EoW: M7.
