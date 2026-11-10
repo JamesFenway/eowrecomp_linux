@@ -45,7 +45,10 @@ CXX      := $(ZIG) c++ -target x86_64-windows-gnu
 GENARCH  ?= -mcpu=x86_64_v3  # (zig's spelling of x86-64-v3)
 endif
 IMGUI    := third_party/imgui
-GENFLAGS := -O1 -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
+# GAMEOPT: the game code's optimisation level. -O1 so far (never compared with -O2: docs/STATUS.md); part of
+# GAMELIB_ID, so a different level makes the start screen build the game code again
+GAMEOPT  ?= -O1
+GENFLAGS := $(GAMEOPT) -fno-strict-aliasing -Wno-return-type -Wno-unused-label -fvisibility=hidden -Iruntime
 # FNPROF=1: game code with the function-entry profiler's hook (EOWRECOMP_FNPROF; runtime/cpu.h FN_ENTER)
 GENFLAGS += $(if $(FNPROF),-DEOWRECOMP_FNPROF)
 

@@ -5,6 +5,10 @@ name: Linux AppImage
 
 on:
   workflow_dispatch:
+    inputs:
+      game_opt:
+        description: "The game code's optimisation level (Makefile GAMEOPT), e.g. -O2 for a speed comparison"
+        default: "-O1"
   push:
     branches: [main, linux-appimage]
     paths:
@@ -31,13 +35,15 @@ jobs:
 
       - name: Build the AppImage
         run: tools/linux/appimage.sh x86_64
+        env:
+          GAMEOPT: ${{ inputs.game_opt || '-O1' }}
 
       - name: Checksum
         run: cd build/dist && sha256sum *.AppImage | tee SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: EoWRecomp-linux-x86_64-AppImage
+          name: EoWRecomp-linux-x86_64-AppImage${{ (inputs.game_opt && inputs.game_opt != '-O1') && format('-game{0}', inputs.game_opt) || '' }}
           path: |
             build/dist/*.AppImage
             build/dist/SHA256SUMS.txt

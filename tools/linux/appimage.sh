@@ -18,7 +18,7 @@ image() {  # arch -> tag (built once, then cached by podman)
 }
 run() {  # image, command...: the checkout mounted at /src
     local img=$1; shift
-    podman run --rm --arch "${img##*:}" -v "$PWD:/src" -w /src -e SYSROOT=/src/build/linux/aarch64/sysroot "$img" "$@"
+    podman run --rm --arch "${img##*:}" -v "$PWD:/src" -w /src -e SYSROOT=/src/build/linux/aarch64/sysroot -e GAMEOPT="${GAMEOPT:--O1}" "$img" "$@"
 }
 
 AMD=$(image amd64)

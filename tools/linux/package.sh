@@ -17,6 +17,7 @@ APPDIR=$L/AppDir
 VERSION=$(sed -n 's/^#define EOWRECOMP_VERSION "\(.*\)"/\1/p' runtime/ui/launcher.mm)
 OUT="build/dist/EoWRecomp-$VERSION-linux-$ARCH.AppImage"
 JOBS=$(nproc)
+GAMEOPT=${GAMEOPT:--O1}  # (the game code's -O level: Makefile GAMEOPT)
 
 tools/linux/build_deps.sh "$ARCH"
 
@@ -24,9 +25,9 @@ CROSSCC=clang
 if [ "$ARCH" != "$(uname -m)" ]; then
     : "${SYSROOT:?cross build: SYSROOT (the arm64 root filesystem)}"
     CROSSCC="clang --target=$ARCH-linux-gnu --sysroot=$SYSROOT -fuse-ld=lld"
-    MAKEARGS=(ARCH="$ARCH" SYSROOT="$SYSROOT")
+    MAKEARGS=(ARCH="$ARCH" SYSROOT="$SYSROOT" GAMEOPT="$GAMEOPT")
 else
-    MAKEARGS=(ARCH="$ARCH")
+    MAKEARGS=(ARCH="$ARCH" GAMEOPT="$GAMEOPT")
 fi
 
 # the app alone (the game code is built on the player's machine)
@@ -52,7 +53,7 @@ cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h runtime/modu
 # log 2026-11-09). Only for this machine's arch: a cross build's zig doesn't run here.
 if [ "$ARCH" = "$(uname -m)" ]; then
     CPU=; [ "$ARCH" = x86_64 ] && CPU=-mcpu=x86_64_v3
-    "$APPDIR/usr/bin/zig/zig" cc -O1 -fno-strict-aliasing -fvisibility=hidden $CPU -fPIC \
+    "$APPDIR/usr/bin/zig/zig" cc $GAMEOPT -fno-strict-aliasing -fvisibility=hidden $CPU -fPIC \
         -I"$APPDIR/usr/bin/gamelib-src" -DGAMELIB_ID='"check"' -c "$APPDIR/usr/bin/gamelib-src/gamelib_entry.c" \
         -o "$L/gamelib_entry_check.o" || { echo "package: gamelib_entry.c doesn't compile from gamelib-src/"; exit 1; }
     rm -f "$L/gamelib_entry_check.o"
