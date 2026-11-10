@@ -165,8 +165,14 @@ Linux** (Intel Iris Xe, Mesa ANV). Metal não foi tocado nem testado.
   de desempenho do Deck (limite de fps, taxa de atualização, resolução do jogo) e tirar a espera do present da thread
   que roda o jogo.
   Medido depois (`EOWRECOMP_LOG_PACE=1`, Deck OLED, 2026-11-10): no modo 30 cada quadro tem período 33.8 ms, 16.4 ms
-  bloqueado (a espera pelo próximo vsync: normal) e **17.3 ms de trabalho** na thread do jogo — a GPU faz ~5 ms por
-  quadro e a tradução de comandos ~1.5 ms. Então o limite é a CPU no código do próprio jogo, não o Gamescope. E o
-  modo 30 não volta sozinho: a volta pede média abaixo de 13 ms. Teste em andamento: código do jogo com `-O2`
-  (`GAMEOPT`, input `game_opt` do workflow; artefato `...-game-O2`) contra o `-O1` de sempre.
+  bloqueado e 17.3 ms "ocupado". A leitura "limitado pela CPU do jogo" estava **errada**, e o teste com `-O2`
+  (`GAMEOPT`) não vale: o "ocupado" é quase todo o outro `vkQueueSubmit2` do quadro. Em quatro logs com
+  `EOWRECOMP_VK_PROF=1`, cada submit leva ~0.1 ms até a linha `guest heap imported ... 3220 MB` e 17-23 ms depois
+  dela (1.8 s de cada 2 s; GPU ~9% ocupada). Causa provável: o amdgpu reconfere as páginas de um buffer userptr
+  (import de ponteiro do host) a cada submissão. **Correção** (`ba668e8`, não testada): no RADV o heap do jogo vira
+  memória da GPU mapeada no próprio endereço (`VK_EXT_map_memory_placed`, `exec.c` `vk_guest_heap`, chamada no
+  SetHeapSize); `EOWRECOMP_VK_HEAP_PLACED=0/1`. O lavapipe não tem a extensão: só o Deck testa. **O usuário deve
+  ver**: as linhas `[vk] guest heap: ... mapped at 7240000000` e `guest heap bound`, e o `submit` perto de 0.1 ms
+  por submit; teste de diagnóstico no build anterior: `EOWRECOMP_VK_NO_GMEM=1`. Relatório completo:
+  `steam-deck-performance-report.md` nos arquivos do projeto. Amostrador de CPU: `EOWRECOMP_SAMPLE=<de>:<até>`.
 - Widescreen, ícones de botão, menu sem abas específicas do EoW: M7.
