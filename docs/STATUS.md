@@ -135,5 +135,44 @@ Linux** (Intel Iris Xe, Mesa ANV). Metal não foi tocado nem testado.
    (código do jogo: ~1 h na primeira vez; depois só o que muda).
 
 ### Pendências conhecidas
-- `docs/linux.md` / `docs/BUILD-windows.md` ainda são do LAS.
+- `docs/BUILD-windows.md` ainda é do LAS. `docs/linux.md` revisado (2026-11-09): `make appimage` / `make smoketest`
+  ligados no Makefile, o helper do gerador (`make gen-helper`) no lugar do helper de randomizer do LAS, o smoketest
+  refeito para o EoW (setup, tela inicial, abertura + primeira cena, fps). **Ainda não rodados**: falta um build do
+  AppImage (podman) e um smoketest com os arquivos do jogo; Steam Deck (RADV) nunca testado.
+- **Steam Deck** (2026-11-09, branch `linux-appimage`): workflow `.github/workflows/linux-appimage.yml` (Actions)
+  gera o AppImage x86-64 como artefato; sob Gamescope (Game Mode) a janela é sempre tela cheia
+  (`settings_gamescope()`: `GAMESCOPE_WAYLAND_DISPLAY` / `XDG_CURRENT_DESKTOP=gamescope`; sem isso o Gamescope
+  mostrava a janela de 1280x720 encaixotada). Lógica testada só com variáveis de ambiente falsas; o AppImage não pôde
+  ser montado na sessão (rede do sandbox bloqueia ziglang.org, ffmpeg.org, apt.llvm.org, Launchpad): ver o resultado
+  do workflow. Passos para o usuário em `docs/linux.md` ("Steam Deck"). **O usuário deve testar no Deck**: setup no
+  Desktop Mode (tempo do build do código do jogo), tela cheia no Game Mode, controles (View+Menu abre o menu), fps
+  (RADV nunca rodou o jogo), log `~/.local/share/eowrecomp/eowrecomp.log`.
+- **Primeira execução no Steam Deck** (2026-11-09, LCD, SteamOS, RADV VANGOGH, Game Mode): o AppImage do workflow
+  instala, o setup gera e compila o código do jogo no próprio Deck (antes falhava: `modules.h` faltava em
+  `gamelib-src/`), o jogo entra na abertura. Log do usuário: swapchain 1280x720 (Gamescope WSI), `[post] 1920x1080
+  smaa -> 1280x720`; 15-25 fps enquanto pipelines compilam, depois **26-30 fps** estáveis (`[pace]`: modo 30 fps do
+  próprio jogo). `wait` na GPU ~3 ms a cada 2 s: **limitado pela CPU**, não pela GPU (baixar a resolução quase não
+  deve ajudar). Ainda pulados: `compute program` ~370 dispatches/2 s (o SUST `eb20…`, problema aberto 3). O SDL
+  reporta o controle como "Google Stadia Controller" (prompts podem sair errados). Próximo: perfil de CPU no Deck
+  (`FNPROF=1`), swapchain 1280x800 sob Gamescope.
+- **Ritmo de quadros no Deck** (2026-11-09/10): o tempo bloqueado no acquire / submit do present conta como ocioso
+  (`g_blocked_ns`); antes o Gamescope prendia o jogo no modo 30 fps até na tela inicial. Resultado no Deck: 37-48 fps,
+  de volta ao modo 60. O commit seguinte trocava para `immediate` supondo que o Gamescope não oferecia mailbox:
+  **errado** — o log mostra `present mode mailbox (offered: mailbox fifo)`, então foi revertido (fica só a linha do
+  log). Na execução seguinte (swapchain 1280x800, ciclo de 11.11 ms e depois 16.67 ms: configuração do Deck mudou) o
+  jogo ficou em ~25 fps no modo 30: GPU ~180 ms e `cpu exec` ~40 ms a cada 2 s, mas `submit` ~1850 ms — a thread de
+  apresentação passa quase todo o tempo esperando o Gamescope devolver a imagem. Próximo: confirmar as configurações
+  de desempenho do Deck (limite de fps, taxa de atualização, resolução do jogo) e tirar a espera do present da thread
+  que roda o jogo.
+  Medido depois (`EOWRECOMP_LOG_PACE=1`, Deck OLED, 2026-11-10): no modo 30 cada quadro tem período 33.8 ms, 16.4 ms
+  bloqueado e 17.3 ms "ocupado". A leitura "limitado pela CPU do jogo" estava **errada**, e o teste com `-O2`
+  (`GAMEOPT`) não vale: o "ocupado" é quase todo o outro `vkQueueSubmit2` do quadro. Em quatro logs com
+  `EOWRECOMP_VK_PROF=1`, cada submit leva ~0.1 ms até a linha `guest heap imported ... 3220 MB` e 17-23 ms depois
+  dela (1.8 s de cada 2 s; GPU ~9% ocupada). Causa provável: o amdgpu reconfere as páginas de um buffer userptr
+  (import de ponteiro do host) a cada submissão. **Correção** (`ba668e8`, não testada): no RADV o heap do jogo vira
+  memória da GPU mapeada no próprio endereço (`VK_EXT_map_memory_placed`, `exec.c` `vk_guest_heap`, chamada no
+  SetHeapSize); `EOWRECOMP_VK_HEAP_PLACED=0/1`. O lavapipe não tem a extensão: só o Deck testa. **O usuário deve
+  ver**: as linhas `[vk] guest heap: ... mapped at 7240000000` e `guest heap bound`, e o `submit` perto de 0.1 ms
+  por submit; teste de diagnóstico no build anterior: `EOWRECOMP_VK_NO_GMEM=1`. Relatório completo:
+  `steam-deck-performance-report.md` nos arquivos do projeto. Amostrador de CPU: `EOWRECOMP_SAMPLE=<de>:<até>`.
 - Widescreen, ícones de botão, menu sem abas específicas do EoW: M7.

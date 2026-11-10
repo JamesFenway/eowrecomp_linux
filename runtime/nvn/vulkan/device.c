@@ -152,7 +152,7 @@ static void create_device(void) {
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, NULL);
     VkExtensionProperties *ep = calloc(ne, sizeof *ep);
     vkEnumerateDeviceExtensionProperties(g_vk.phys, NULL, &ne, ep);
-    const char *ext[12];
+    const char *ext[16];
     uint32_t n_ext = 0;
     ext[n_ext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     g_vk.custom_border = has_ext(ep, ne, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
@@ -161,6 +161,28 @@ static void create_device(void) {
     if (g_vk.divisor) ext[n_ext++] = VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME;
     g_vk.host_import = has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);  // guest heap as a GPU buffer (exec.c)
     if (g_vk.host_import) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+#ifdef VK_EXT_map_memory_placed
+    // the guest heap as GPU memory mapped at its guest address (exec.c vk_guest_heap)
+    VkPhysicalDeviceMapMemoryPlacedFeaturesEXT placed = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_FEATURES_EXT};
+    if (has_ext(ep, ne, VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME) && has_ext(ep, ne, VK_KHR_MAP_MEMORY_2_EXTENSION_NAME)) {
+        VkPhysicalDeviceFeatures2 pf = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &placed};
+        vkGetPhysicalDeviceFeatures2(g_vk.phys, &pf);
+        placed.pNext = NULL;
+        placed.memoryMapRangePlaced = VK_FALSE;
+        if (placed.memoryMapPlaced) {
+            g_vk.map_placed = true;
+            g_vk.unmap_reserve = placed.memoryUnmapReserve;
+            ext[n_ext++] = VK_KHR_MAP_MEMORY_2_EXTENSION_NAME;
+            ext[n_ext++] = VK_EXT_MAP_MEMORY_PLACED_EXTENSION_NAME;
+        }
+    }
+#endif
+    {
+        VkPhysicalDeviceDriverProperties drv = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &drv};
+        vkGetPhysicalDeviceProperties2(g_vk.phys, &p2);
+        g_vk.radv = drv.driverID == VK_DRIVER_ID_MESA_RADV;
+    }
     // a portability implementation (MoltenVK) must have its subset extension enabled when it lists it
     if (has_ext(ep, ne, "VK_KHR_portability_subset")) ext[n_ext++] = "VK_KHR_portability_subset";
     bool fault = has_ext(ep, ne, VK_EXT_DEVICE_FAULT_EXTENSION_NAME);  // device-lost diagnostics (vk_device_fault_report)
@@ -191,6 +213,9 @@ static void create_device(void) {
     VkPhysicalDeviceFaultFeaturesEXT ff = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT, .deviceFault = VK_TRUE,
                                            .pNext = &f11};
     VkPhysicalDeviceFeatures2 f = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = fault ? (void *)&ff : (void *)&f11};
+#ifdef VK_EXT_map_memory_placed
+    if (g_vk.map_placed) { placed.pNext = f.pNext; f.pNext = &placed; }
+#endif
     VkPhysicalDeviceFeatures *b = &f.features, *h = &have.features;
     b->independentBlend = h->independentBlend;
     b->dualSrcBlend = h->dualSrcBlend;
@@ -288,8 +313,18 @@ static VkPresentModeKHR present_mode(void) {
     VkPresentModeKHR m[16];
     if (n > 16) n = 16;
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_vk.phys, g_vk.surface, &n, m);
-    for (uint32_t i = 0; i < n; i++) if (m[i] == want) return want;
-    return VK_PRESENT_MODE_FIFO_KHR;
+    bool has[8] = {false};
+    for (uint32_t i = 0; i < n; i++) if (m[i] < 8) has[m[i]] = true;
+    static const char *const name[4] = {"immediate", "mailbox", "fifo", "fifo relaxed"};
+    VkPresentModeKHR got = has[want] ? want : VK_PRESENT_MODE_FIFO_KHR;
+    // (Gamescope, Steam Deck's Game Mode, offers mailbox and fifo: the log line below says which one a run got)
+    static VkPresentModeKHR logged = (VkPresentModeKHR)-1;
+    if (got != logged) {
+        logged = got;
+        LOG("[vk] present mode %s (asked %s; offered:%s%s%s%s)\n", name[got & 3], name[want & 3], has[0] ? " immediate" : "",
+            has[1] ? " mailbox" : "", has[2] ? " fifo" : "", has[3] ? " fifo-relaxed" : "");
+    }
+    return got;
 }
 
 static void create_swapchain(void) {
@@ -443,6 +478,8 @@ static Frame cur_frame;
 
 // Acquire the next window image and begin rendering into it (cleared to `clear`). Returns false when there is
 // nothing to draw into (minimised window).
+extern __thread uint64_t g_blocked_ns;  // kernel.c: this thread's idle time (waits, sleeps), for frame pacing
+
 bool vk_frame_begin(const float clear[4]) {
     cur_frame.ok = false;
     int w, h;
@@ -459,7 +496,9 @@ bool vk_frame_begin(const float clear[4]) {
     slot = (slot + 1) % FRAMES;
     if (!acquire_sem[slot]) acquire_sem[slot] = binary_semaphore();
     vk_wait_seq(slot_seq[slot]);
+    uint64_t t_acq = plat_now_ns();
     VkResult r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
+    g_blocked_ns += plat_now_ns() - t_acq;  // (waiting for the display: see vk_frame_end)
     if (r == VK_ERROR_OUT_OF_DATE_KHR) {
         recreate_swapchain();
         r = vkAcquireNextImageKHR(g_vk.dev, g_vk.swapchain, UINT64_MAX, acquire_sem[slot], VK_NULL_HANDLE, &cur_frame.image);
@@ -531,10 +570,17 @@ void vk_frame_end(const char *shot_path) {
     uint32_t img = cur_frame.image;
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
     uint64_t seq = vk_pending_seq();
+    // Waiting for the display is idle time, not frame work (frame pacing, exec.c vk_pace_frame: busy = period minus
+    // the presenting thread's blocked time). Under Gamescope (Steam Deck, RADV) that wait happens right here: the
+    // submit that waits on the acquired image blocks until Gamescope hands the image back (~13 ms a submit, 1.5-1.8 s
+    // of every 2 s in EOWRECOMP_VK_PROF's "submit"), so even the title screen's 64 draws counted as 30 ms frames and
+    // the game was held in its 30 fps mode. The GPU's own work still reaches the game through its counters.
+    uint64_t t_pres = plat_now_ns();
     vk_submit_extra(cur_frame.acquired, done_sem[img], VK_NULL_HANDLE);
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &done_sem[img],
                            .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
     VkResult r = vkQueuePresentKHR(g_vk.queue, &pi);
+    g_blocked_ns += plat_now_ns() - t_pres;
     if (r == VK_ERROR_SURFACE_LOST_KHR) atomic_store(&g_surface_stale, true);
     // (a swapchain the system turns, IDENTITY on a rotated display, is "suboptimal" at every present: that's this,
     // not a new size - recreating it each frame would cost the frame)
@@ -655,6 +701,8 @@ void backend_present(NvnTexture *t) {
     if (slow_ms > 0 && total_frames > 2600 && (!slow_until || (long)total_frames < slow_until)) SDL_Delay((Uint32)slow_ms);
     extern void fnprof_frame(uint64_t frame);
     fnprof_frame(total_frames);
+    extern void sampler_frame(uint64_t frame);  // (runtime/sampler.c: EOWRECOMP_SAMPLE)
+    sampler_frame(total_frames);
     extern void reboot_test_frame(uint64_t frame);  // runtime/main.c (EOWRECOMP_REBOOT_AT)
     reboot_test_frame(total_frames);
     extern void vk_level_change_check(void);
@@ -789,7 +837,7 @@ void ui_window_init(void) {
     SDL_AddEventWatch(lifecycle_watch, NULL);
     rt_window_icon(window);
     // the Fullscreen setting applies from the start screen on (not only once the game runs); test windows stay windows
-    if (g_settings.fullscreen && !getenv("EOWRECOMP_WINDOW") && !getenv("EOWRECOMP_HIDDEN")) SDL_SetWindowFullscreen(window, true);
+    if (settings_fullscreen() && !getenv("EOWRECOMP_WINDOW") && !getenv("EOWRECOMP_HIDDEN")) SDL_SetWindowFullscreen(window, true);
     create_instance();
     if (!SDL_Vulkan_CreateSurface(window, g_vk.inst, NULL, &g_vk.surface)) FATAL("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
     pick_device();
@@ -817,6 +865,11 @@ void backend_reset(void) {
     g_last_presented = NULL;
 }
 void backend_guest_memory_reset(void) {}  // (exec.c re-imports the heap on first use)
+void backend_guest_heap(uint64_t size) {  // (kernel.c SetHeapSize, on a game thread)
+    extern void vk_guest_heap(uint64_t size);
+    while (!atomic_load(&ui_ready)) SDL_Delay(1);  // (the device: ui_window_init, as backend_init waits for it)
+    if (g_vk.dev) vk_guest_heap(size);
+}
 void backend_clear_window(void) {
     static const float black[4] = {0, 0, 0, 1};
     if (g_vk.dev && vk_frame_begin(black)) vk_frame_end(NULL);

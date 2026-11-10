@@ -355,6 +355,21 @@ const char *romfs_file_at(uint64_t off) {
     return NULL;
 }
 
+bool romfs_file_find(const char *path, uint64_t *off, uint64_t *size) {
+    if (romfs_fd < 0 || !path) return false;
+    while (*path == '/') path++;
+    for (int i = 0; i < rom_nfiles; i++)  // (10 963 files, a few lookups per movie)
+        if (!strcmp(rom_files[i].path, path)) {
+            *off = rom_files[i].off, *size = rom_files[i].size;
+            return true;
+        }
+    return false;
+}
+
+long long romfs_image_read(void *dst, uint64_t size, uint64_t off) {
+    return romfs_fd < 0 ? -1 : (long long)romfs_read(romfs_fd, (uint8_t *)dst, size, off);
+}
+
 // ------------------------------------------------------------------ IStorage (raw RomFS image)
 typedef struct { int fd; uint64_t size; } Storage;
 

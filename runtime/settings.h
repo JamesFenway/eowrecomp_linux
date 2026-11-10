@@ -45,3 +45,9 @@ void settings_save(void);
 const char *settings_language(void);
 // That code's name for the menu ("Spanish")
 const char *settings_language_name(void);
+// Running under Gamescope (Steam Deck's Game Mode, or gamescope started by hand): it shows one window over the whole
+// screen and letterboxes a window of another shape (a 1280x720 one on the Deck's 1280x800), so there the window is
+// always fullscreen, whatever the setting (which stays as saved, for the desktop).
+bool settings_gamescope(void);
+// The window should be fullscreen: the setting, or Gamescope
+bool settings_fullscreen(void);

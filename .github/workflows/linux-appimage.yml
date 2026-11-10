@@ -1,0 +1,50 @@
+# The x86-64 Linux AppImage (Steam Deck included), built by tools/linux/appimage.sh in its Ubuntu 22.04 container and
+# kept as a workflow artifact. No game code or files in it: the start screen builds the game code from the player's own
+# files (tools/linux/package.sh stops if the app has game code linked in). docs/linux.md.
+name: Linux AppImage
+
+on:
+  workflow_dispatch:
+    inputs:
+      game_opt:
+        description: "The game code's optimisation level (Makefile GAMEOPT), e.g. -O2 for a speed comparison"
+        default: "-O1"
+  push:
+    branches: [main, linux-appimage]
+    paths:
+      - 'runtime/**'
+      - 'tools/**'
+      - 'third_party/**'
+      - 'Makefile'
+      - '.github/workflows/linux-appimage.yml'
+
+jobs:
+  appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # the pinned SDL3 / FFmpeg / shaderc builds (tools/linux/build_deps.sh skips what exists) and their sources
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build/linux/src
+            build/linux/x86_64/deps
+          key: linux-deps-x86_64-${{ hashFiles('tools/linux/build_deps.sh', 'tools/linux/Containerfile') }}
+
+      - name: Build the AppImage
+        run: tools/linux/appimage.sh x86_64
+        env:
+          GAMEOPT: ${{ inputs.game_opt || '-O1' }}
+
+      - name: Checksum
+        run: cd build/dist && sha256sum *.AppImage | tee SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EoWRecomp-linux-x86_64-AppImage${{ (inputs.game_opt && inputs.game_opt != '-O1') && format('-game{0}', inputs.game_opt) || '' }}
+          path: |
+            build/dist/*.AppImage
+            build/dist/SHA256SUMS.txt
+          if-no-files-found: error

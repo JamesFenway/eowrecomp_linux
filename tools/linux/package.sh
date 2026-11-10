@@ -1,11 +1,11 @@
 #!/bin/bash
-# tools/linux/package.sh <x86_64|aarch64> (inside the amd64 build container, tools/linux/appimage.sh): the game built
-# against build/linux/<arch>/deps and the seed generator helper (tools/linux/rando_helper.sh) put together
-# as an AppDir and packed by appimagetool: build/dist/EoWRecomp-<version>-linux-<arch>.AppImage
-# (named like the macOS / Windows releases; GitHub shows it as LAS.Recomp-<version>-linux-<arch>.AppImage).
-# Shipped next to the executable (usr/bin, where runtime/paths.c rt_resource looks): rando-gen/, what the start screen
-# builds the game code with on the player's machine (runtime/gamebuild.c: eowgen/, zig/ from tools/fetch_zig.sh,
-# gamelib-src/), the window icon, the start screen font. No game code: that's built from the player's own files. usr/lib: the libraries from deps/ only - glibc, libstdc++, the Vulkan loader and the
+# tools/linux/package.sh <x86_64|aarch64> (inside the amd64 build container, tools/linux/appimage.sh): the app built
+# against build/linux/<arch>/deps and the game code generator helper (make gen-helper, frozen by appimage.sh) put
+# together as an AppDir and packed by appimagetool: build/dist/EoWRecomp-<version>-linux-<arch>.AppImage (named like
+# the macOS / Android releases).
+# Shipped next to the executable (usr/bin, where runtime/paths.c rt_resource looks): what the start screen builds the
+# game code with on the player's machine (runtime/gamebuild.c: eowgen/, zig/ from tools/fetch_zig.sh, gamelib-src/),
+# the window icon, the start screen font. No game code: that's built from the player's own files. usr/lib: the libraries from deps/ only - glibc, libstdc++, the Vulkan loader and the
 # GPU drivers are the system's (a bundled loader would not find the user's drivers). No game files or fonts.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -17,6 +17,7 @@ APPDIR=$L/AppDir
 VERSION=$(sed -n 's/^#define EOWRECOMP_VERSION "\(.*\)"/\1/p' runtime/ui/launcher.mm)
 OUT="build/dist/EoWRecomp-$VERSION-linux-$ARCH.AppImage"
 JOBS=$(nproc)
+GAMEOPT=${GAMEOPT:--O1}  # (the game code's -O level: Makefile GAMEOPT)
 
 tools/linux/build_deps.sh "$ARCH"
 
@@ -24,9 +25,9 @@ CROSSCC=clang
 if [ "$ARCH" != "$(uname -m)" ]; then
     : "${SYSROOT:?cross build: SYSROOT (the arm64 root filesystem)}"
     CROSSCC="clang --target=$ARCH-linux-gnu --sysroot=$SYSROOT -fuse-ld=lld"
-    MAKEARGS=(ARCH="$ARCH" SYSROOT="$SYSROOT")
+    MAKEARGS=(ARCH="$ARCH" SYSROOT="$SYSROOT" GAMEOPT="$GAMEOPT")
 else
-    MAKEARGS=(ARCH="$ARCH")
+    MAKEARGS=(ARCH="$ARCH" GAMEOPT="$GAMEOPT")
 fi
 
 # the app alone (the game code is built on the player's machine)
@@ -42,13 +43,21 @@ cp docs/icon/icon_1024.png "$APPDIR/usr/bin/icon.png"
 cp third_party/fonts/Baloo2/Baloo2-SemiBold.ttf "$APPDIR/usr/bin/"  # (start screen font, OFL)
 cp third_party/fonts/Baloo2/OFL.txt "$APPDIR/usr/bin/Baloo2-OFL.txt"
 cp README.md LICENSE "$APPDIR/usr/bin/"  # (licenses and source links of the bundled components: README "License")
-[ -d "$L/helper/rando-gen" ] || { echo "no seed generator helper: tools/linux/rando_helper.sh $ARCH first"; exit 1; }
-cp -R "$L/helper/rando-gen" "$APPDIR/usr/bin/"
-[ -d "$L/helper/eowgen" ] || { echo "no game code generator helper: tools/linux/rando_helper.sh $ARCH first"; exit 1; }
+[ -x "$L/helper/eowgen/eowgen" ] || { echo "no game code generator helper in $L/helper (tools/linux/appimage.sh builds it)"; exit 1; }
 cp -R "$L/helper/eowgen" build/zig "$APPDIR/usr/bin/"
 mkdir "$APPDIR/usr/bin/gamelib-src"
-cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gamelib_entry.c runtime/hle/hle_symbols.txt \
-   "$APPDIR/usr/bin/gamelib-src/"
+cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h runtime/modules.h tools/gamelib_entry.c \
+   runtime/hle/hle_symbols.txt "$APPDIR/usr/bin/gamelib-src/"
+# The start screen's first compile, as runtime/gamebuild.c runs it: the shipped zig on the shipped headers. Without
+# modules.h (gamelib.h includes it) every player's setup failed in its first second ("1 error generated", Steam Deck
+# log 2026-11-09). Only for this machine's arch: a cross build's zig doesn't run here.
+if [ "$ARCH" = "$(uname -m)" ]; then
+    CPU=; [ "$ARCH" = x86_64 ] && CPU=-mcpu=x86_64_v3
+    "$APPDIR/usr/bin/zig/zig" cc $GAMEOPT -fno-strict-aliasing -fvisibility=hidden $CPU -fPIC \
+        -I"$APPDIR/usr/bin/gamelib-src" -DGAMELIB_ID='"check"' -c "$APPDIR/usr/bin/gamelib-src/gamelib_entry.c" \
+        -o "$L/gamelib_entry_check.o" || { echo "package: gamelib_entry.c doesn't compile from gamelib-src/"; exit 1; }
+    rm -f "$L/gamelib_entry_check.o"
+fi
 cp tools/linux/AppRun "$APPDIR/" && chmod +x "$APPDIR/AppRun"
 cp tools/linux/eowrecomp.desktop "$APPDIR/"
 cp docs/icon/icon_1024.png "$APPDIR/eowrecomp.png" && ln -sf eowrecomp.png "$APPDIR/.DirIcon"

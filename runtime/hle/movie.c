@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "../hle.h"
 #include "../settings.h"
@@ -169,7 +170,57 @@ typedef struct {
     AVPacket *pkt;
     bool have_pkt, eof;
     bool skippable;  // the launch opening (forced on the first launch, no save yet): A / B / + ends it
+    // a movie read from the RomFS image rather than a file on disk (the game package read in place: no romfs/
+    // folder, runtime/nxpkg.c): FFmpeg reads it through these
+    AVIOContext *io;
+    uint64_t rom_off, rom_size, rom_pos;
 } Extractor;
+
+static int rom_io_read(void *opaque, uint8_t *buf, int n) {
+    Extractor *e = opaque;
+    if (e->rom_pos >= e->rom_size) return AVERROR_EOF;
+    if ((uint64_t)n > e->rom_size - e->rom_pos) n = (int)(e->rom_size - e->rom_pos);
+    long long r = romfs_image_read(buf, (uint64_t)n, e->rom_off + e->rom_pos);
+    if (r <= 0) return r < 0 ? AVERROR(EIO) : AVERROR_EOF;
+    e->rom_pos += (uint64_t)r;
+    return (int)r;
+}
+
+static int64_t rom_io_seek(void *opaque, int64_t pos, int whence) {
+    Extractor *e = opaque;
+    if (whence & AVSEEK_SIZE) return (int64_t)e->rom_size;
+    whence &= ~AVSEEK_FORCE;
+    int64_t to = whence == SEEK_SET ? pos : whence == SEEK_CUR ? (int64_t)e->rom_pos + pos :
+                 whence == SEEK_END ? (int64_t)e->rom_size + pos : -1;
+    if (to < 0) return AVERROR(EINVAL);
+    e->rom_pos = (uint64_t)to;
+    return to;
+}
+
+// the open movie and, for one from the RomFS image, its reader (avformat_close_input leaves a custom one alone)
+static void ex_close(Extractor *e) {
+    if (e->fmt) avformat_close_input(&e->fmt);
+    if (e->io) {
+        av_freep(&e->io->buffer);
+        avio_context_free(&e->io);
+    }
+}
+
+// the movie at RomFS path rel, read from the RomFS image: false if it isn't there
+static bool ex_open_romfs(Extractor *e, const char *rel) {
+    if (!romfs_file_find(rel, &e->rom_off, &e->rom_size)) return false;
+    e->rom_pos = 0;
+    enum { IO_BUF = 1 << 16 };
+    uint8_t *buf = av_malloc(IO_BUF);
+    e->io = buf ? avio_alloc_context(buf, IO_BUF, 0, e, rom_io_read, NULL, rom_io_seek) : NULL;
+    if (!e->io) { av_free(buf); return false; }
+    e->fmt = avformat_alloc_context();
+    if (!e->fmt) { ex_close(e); return false; }
+    e->fmt->pb = e->io;
+    e->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+    if (avformat_open_input(&e->fmt, NULL, NULL, NULL) < 0) { ex_close(e); return false; }  // (frees fmt on failure)
+    return true;
+}
 
 static bool g_skip_held;           // ex_fill: A / B held at the last look
 static double g_skip_pressed_at;    // when they were pressed (0 = not yet)
@@ -217,9 +268,17 @@ static void ex_set_data_source(Cpu *c) {
     const char *rel = path && strstr(path, ":/") ? strstr(path, ":/") + 2 : path;
     char host[1024];
     snprintf(host, sizeof host, "%s/%s", g_romfs_dir, rel ? rel : "");
-    LOG("[movie] open %s -> %s\n", path ? path : "(null)", host);
-    if (avformat_open_input(&e->fmt, host, NULL, NULL) < 0 || avformat_find_stream_info(e->fmt, NULL) < 0) {
-        LOG("[movie] cannot open %s\n", host);
+    ex_close(e);
+    // a romfs/ folder on disk (tools/nca_extract.py), else the RomFS image: romfs.bin, or the game package itself
+    // (the start screen's setup: no romfs/ at all - the title movie couldn't open and the title stayed black,
+    // Steam Deck 2026-11-09)
+    struct stat st;
+    bool on_disk = stat(host, &st) == 0;
+    LOG("[movie] open %s -> %s\n", path ? path : "(null)", on_disk ? host : "the RomFS image");
+    bool opened = on_disk ? avformat_open_input(&e->fmt, host, NULL, NULL) == 0 : ex_open_romfs(e, rel);
+    if (!opened || avformat_find_stream_info(e->fmt, NULL) < 0) {
+        LOG("[movie] cannot open %s\n", on_disk ? host : rel ? rel : "(null)");
+        ex_close(e);
         c->x[0] = 1;
         return;
     }
@@ -345,7 +404,7 @@ static void movie_track(int kind, void *p, bool add) {
 
 static void ex_dtor(Cpu *c) {
     Extractor *e = self_state(c);
-    if (e && e->fmt) avformat_close_input(&e->fmt);
+    if (e) ex_close(e);
     if (e) movie_track(0, e, false);
     c->x[0] = 0;
 }
@@ -762,7 +821,7 @@ static void dec_dtor(Cpu *c) {
 RT_ON_RESET(movie_reset) {
     for (int i = 0; i < MAX_MOVIE_OBJS; i++) {
         Extractor *e = g_movie_objs[0][i];
-        if (e && e->fmt) avformat_close_input(&e->fmt);
+        if (e) ex_close(e);
         Decoder *d = g_movie_objs[1][i];
         if (d && d->ctx) avcodec_free_context(&d->ctx);
         g_movie_objs[0][i] = g_movie_objs[1][i] = NULL;

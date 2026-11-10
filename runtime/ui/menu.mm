@@ -259,7 +259,7 @@ void menu_apply_window_requests(void *win) {
     static bool first = true;
     if (first || g_want_fullscreen_apply.exchange(false)) {
         first = false;
-        SDL_SetWindowFullscreen(w, g_settings.fullscreen);
+        SDL_SetWindowFullscreen(w, settings_fullscreen());
     }
 }
 
@@ -436,7 +436,8 @@ static void tab_display(void) {
                "Unlocked: the view fills the window, so wider (or taller) windows show more of the world. Original "
                "16:9: the game's own framing, with bars.");
     bool fs = g_settings.fullscreen;
-    if (opt_toggle("Fullscreen", &fs, false, "Fills the screen. Also: F11, Alt+Enter or Cmd+Ctrl+F.")) {
+    if (opt_toggle("Fullscreen", &fs, false, settings_gamescope() ? "Fills the screen. In Steam Deck's Game Mode (Gamescope) the game is always fullscreen." :
+                                                         "Fills the screen. Also: F11, Alt+Enter or Cmd+Ctrl+F.")) {
         g_settings.fullscreen = fs;
         g_want_fullscreen_apply.store(true);
     }

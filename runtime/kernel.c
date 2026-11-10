@@ -571,6 +571,8 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         heap_size = size;
         region_remove(HEAP_BASE);
         if (size) region_add(HEAP_BASE, size, 5, 3);
+        extern void backend_guest_heap(uint64_t size);  // (Vulkan: the heap as GPU memory where the driver can)
+        backend_guest_heap(size);
         x[0] = R_OK;
         x[1] = HEAP_BASE;
         break;

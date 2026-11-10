@@ -601,6 +601,7 @@ static NvnTexture *g_last_presented;
 // Every game texture goes (the NvnTexture structs themselves are leaked: guest memory pointed at them), the
 // renderer drops what is keyed by guest addresses / objects, and the heap wrapper is let go: guest memory is
 // about to be replaced (backend_guest_memory_reset wraps the new pages).
+void backend_guest_heap(uint64_t size) { (void)size; }  // (Vulkan: exec.c vk_guest_heap)
 void backend_reset(void) {
     if (!queue) return;  // the game never initialised NVN
     extern void renderer_reset(void);
@@ -1085,6 +1086,8 @@ void backend_present(NvnTexture *t) {
     if (slow_ms > 0 && total_frames > 2600) usleep((useconds_t)slow_ms * 1000);
     extern void fnprof_frame(uint64_t frame);
     fnprof_frame(total_frames);
+    extern void sampler_frame(uint64_t frame);  // (runtime/sampler.c: EOWRECOMP_SAMPLE)
+    sampler_frame(total_frames);
     extern void warp_frame(uint64_t frame);
     warp_frame(total_frames);
     extern void reboot_test_frame(uint64_t frame);  // runtime/main.c (EOWRECOMP_REBOOT_AT)

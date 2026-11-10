@@ -39,6 +39,8 @@ typedef struct {
     VkSemaphore timeline;      // value = last completed submission number
     VkCommandPool pool;        // render thread only
     bool custom_border, divisor, host_import;
+    bool map_placed, unmap_reserve;  // VK_EXT_map_memory_placed (the guest heap as GPU memory: exec.c vk_guest_heap)
+    bool radv;                 // Mesa's AMD driver (amdgpu revalidates host-pointer imports at every submission)
     // window
     VkSurfaceKHR surface;
     VkSwapchainKHR swapchain;

@@ -43,5 +43,12 @@ typedef void (*ResetFn)(void);
         HLE_CAT(reset_entry_, __LINE__) = fn;                                               \
     static void fn(void)
 
+// One RomFS file by its path ("region_common/movie/x.webm"): where it lies in the RomFS image, for readers that
+// aren't the game's own fs calls (the movie player). The image may be the player's game package itself, with no
+// romfs/ folder on disk (runtime/services/fs.c). False if the game hasn't opened its RomFS yet or there's no such file.
+bool romfs_file_find(const char *path, uint64_t *off, uint64_t *size);
+// Bytes of the RomFS image at off (as the game reads it: replaced files included); <0 on error
+long long romfs_image_read(void *dst, uint64_t size, uint64_t off);
+
 #define RES_OK 0u
 #define MAKE_RESULT(module, desc) ((uint32_t)(module) | ((uint32_t)(desc) << 9))
