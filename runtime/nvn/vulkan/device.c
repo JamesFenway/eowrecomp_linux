@@ -292,11 +292,7 @@ static VkPresentModeKHR present_mode(void) {
     for (uint32_t i = 0; i < n; i++) if (m[i] < 8) has[m[i]] = true;
     static const char *const name[4] = {"immediate", "mailbox", "fifo", "fifo relaxed"};
     VkPresentModeKHR got = has[want] ? want : VK_PRESENT_MODE_FIFO_KHR;
-    // Gamescope (Steam Deck's Game Mode) offers no mailbox: FIFO there blocked the presenting thread ~18 ms a frame
-    // in the submit that waits for the window image (EOWRECOMP_VK_PROF "submit" 1.4-1.7 s of every 2 s at 38-46 fps,
-    // GPU under half busy). Immediate is the next mode that never waits for the display; Gamescope still composites
-    // it, so it doesn't tear unless the player allows tearing in Steam's performance settings.
-    if (!e && !has[want] && has[VK_PRESENT_MODE_IMMEDIATE_KHR] && settings_gamescope()) got = VK_PRESENT_MODE_IMMEDIATE_KHR;
+    // (Gamescope, Steam Deck's Game Mode, offers mailbox and fifo: the log line below says which one a run got)
     static VkPresentModeKHR logged = (VkPresentModeKHR)-1;
     if (got != logged) {
         logged = got;
