@@ -1085,6 +1085,8 @@ void backend_present(NvnTexture *t) {
     if (slow_ms > 0 && total_frames > 2600) usleep((useconds_t)slow_ms * 1000);
     extern void fnprof_frame(uint64_t frame);
     fnprof_frame(total_frames);
+    extern void sampler_frame(uint64_t frame);  // (runtime/sampler.c: EOWRECOMP_SAMPLE)
+    sampler_frame(total_frames);
     extern void warp_frame(uint64_t frame);
     warp_frame(total_frames);
     extern void reboot_test_frame(uint64_t frame);  // runtime/main.c (EOWRECOMP_REBOOT_AT)

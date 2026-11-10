@@ -676,6 +676,8 @@ void backend_present(NvnTexture *t) {
     if (slow_ms > 0 && total_frames > 2600 && (!slow_until || (long)total_frames < slow_until)) SDL_Delay((Uint32)slow_ms);
     extern void fnprof_frame(uint64_t frame);
     fnprof_frame(total_frames);
+    extern void sampler_frame(uint64_t frame);  // (runtime/sampler.c: EOWRECOMP_SAMPLE)
+    sampler_frame(total_frames);
     extern void reboot_test_frame(uint64_t frame);  // runtime/main.c (EOWRECOMP_REBOOT_AT)
     reboot_test_frame(total_frames);
     extern void vk_level_change_check(void);
